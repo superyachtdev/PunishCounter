@@ -1,0 +1,29 @@
+[
+  {
+    "name": "xf_user",
+    "value": "209%2CTXQSPXgnGsVCt3KPLzzW7wE99TL9wfligFNaTnPo",
+    "domain": ".invadedlands.net",
+    "path": "/",
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "xf_session",
+    "value": "tnyMW_w09hIe9s_B7acnkDTc3JgvFo9u",
+    "domain": ".invadedlands.net",
+    "path": "/",
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "cf_clearance",
+    "value": "JePm24lM8mI5YayEkHOKYGqRfz2lLNWHuCFbqgMY1qs-1765711672-1.2.1.1-hc8w.0rpV53tfwwhLBqWLvDgcS6H8X0xKntWuJXTl606pI1LVaW13bwf51rkExxGXfqWQAsEWzvdKhA73HB8V0150ejdztKOaZ0JuwIeFKTaQMiez7OO2HpqdOQ7BK.GiJ8KLxGQPrWvjSOCsNdbdAK0gSkIB5_XRSuQKgWbcrpJgOpdZQ3lkeDFjzeWioObHr23Dd2VXrjigZRkPUaJFRZ3o.1m.ayPgdNniwTXAYiJcs42S7b1e88AFGZ8WRdQ",
+    "domain": ".invadedlands.net",
+    "path": "/",
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  }
+]
