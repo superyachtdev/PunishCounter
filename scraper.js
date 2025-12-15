@@ -6,7 +6,12 @@ const fetch = require("node-fetch");
 const COOKIES_PATH = "./auth/forum-session.json";
 const APPEALS_URL = "https://invadedlands.net/forums/closed-ban-appeals.40/";
 const DATA_PATH = "./data/processed-appeals.json";
-const SERVER_URL = "http://localhost:3001/appeals/event";
+
+// 🔐 Discord webhook for appeals
+if (!process.env.APPEALS_WEBHOOK_URL) {
+  console.error("❌ APPEALS_WEBHOOK_URL not set");
+  process.exit(1);
+}
 
 const INTERVAL = 60_000;
 
@@ -20,27 +25,45 @@ function saveProcessed(set) {
   fs.writeFileSync(DATA_PATH, JSON.stringify([...set], null, 2));
 }
 
+async function sendToDiscord(content) {
+  await fetch(process.env.APPEALS_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content })
+  });
+}
+
 async function scrapeOnce() {
   console.log("🔍 Scraper tick");
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
-  await context.addCookies(JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8")));
+
+  await context.addCookies(
+    JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8"))
+  );
 
   const page = await context.newPage();
-  await page.goto(APPEALS_URL, { waitUntil: "networkidle" });
-  await page.waitForSelector(".structItem");
+  await page.goto(APPEALS_URL, {
+    waitUntil: "domcontentloaded",
+    timeout: 60000
+  });
+
+  await page.waitForSelector(".structItem", { timeout: 30000 });
 
   const processed = loadProcessed();
 
   const appeals = await page.$$eval(".structItem", items =>
-    items.map(item => ({
-      link: item.querySelector(".structItem-title a")?.href,
-      status: item.querySelector(".label")?.innerText?.trim().toUpperCase(),
-      appealer: item.querySelector(".structItem-parts .username")?.innerText?.trim(),
-      staff: item.querySelector(".structItem-cell--latest .username")?.innerText?.trim(),
-      time: item.querySelector("time")?.getAttribute("datetime")
-    })).filter(a => a.link && a.status && a.staff && a.appealer)
+    items.map(item => {
+      const link = item.querySelector(".structItem-title a")?.href;
+      const status = item.querySelector(".label")?.innerText?.trim().toUpperCase();
+      const appealer = item.querySelector(".structItem-parts .username")?.innerText?.trim();
+      const staff = item.querySelector(".structItem-cell--latest .username")?.innerText?.trim();
+      const time = item.querySelector("time")?.getAttribute("datetime");
+
+      if (!link || !status || !appealer || !staff || !time) return null;
+      return { link, status, appealer, staff, time };
+    }).filter(Boolean)
   );
 
   for (const a of appeals) {
@@ -49,13 +72,14 @@ async function scrapeOnce() {
 
     processed.add(a.link);
 
-    await fetch(SERVER_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(a)
-    });
+    const msg =
+      `APPEAL_CLOSED|staff=${a.staff}` +
+      `|status=${a.status}` +
+      `|appealer=${a.appealer}` +
+      `|time=${a.time}`;
 
-    console.log("🚨 Sent appeal event:", a);
+    await sendToDiscord(msg);
+    console.log("🚨 Sent to Discord:", msg);
   }
 
   saveProcessed(processed);

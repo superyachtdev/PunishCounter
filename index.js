@@ -1,27 +1,17 @@
 require("dotenv").config();
 
-// =================================================
-// ================== IMPORTS ======================
-// =================================================
 const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
 
-// =================================================
-// ================= CONFIG ========================
-// =================================================
 const CHANNEL_ID = "1309957290673180823";
 const PORT = process.env.PORT || 3001;
 
-// 🚨 FAIL FAST if token is missing
 if (!process.env.DISCORD_TOKEN) {
   console.error("❌ DISCORD_TOKEN is not set");
   process.exit(1);
 }
 
-// =================================================
-// =============== DISCORD CLIENT ==================
-// =================================================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -36,15 +26,11 @@ client.once("ready", () => {
 
 client.login(process.env.DISCORD_TOKEN);
 
-// =================================================
-// =============== EXPRESS SERVER ==================
-// =================================================
+// ================= EXPRESS =================
 const app = express();
 app.use(bodyParser.json());
 
-// =================================================
-// ================= SSE ===========================
-// =================================================
+// ================= SSE =====================
 let appealListeners = [];
 
 app.get("/appeals/stream", (req, res) => {
@@ -62,14 +48,22 @@ app.get("/appeals/stream", (req, res) => {
   });
 });
 
-// =================================================
-// ================= LEADERBOARD ===================
-// =================================================
+// ================= DISCORD → SSE =================
+client.on("messageCreate", msg => {
+  if (msg.channel.id !== CHANNEL_ID) return;
+  if (!msg.content.startsWith("APPEAL_")) return;
+
+  const payload = parseAppeal(msg.content);
+
+  for (const c of appealListeners) {
+    c.write(`data: ${JSON.stringify(payload)}\n\n`);
+  }
+});
+
+// ================= LEADERBOARD =================
 app.get("/leaderboard", async (req, res) => {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return res.status(500).send("Channel not found");
-
     let messages = [];
     let lastId;
 
@@ -102,15 +96,26 @@ app.get("/leaderboard", async (req, res) => {
         .sort((a, b) => b.total - a.total)
         .slice(0, 10)
     );
-  } catch (err) {
-    console.error(err);
+  } catch (e) {
+    console.error(e);
     res.status(500).send("Leaderboard error");
   }
 });
 
-// =================================================
-// ================= STARTUP =======================
-// =================================================
+// ================= HELPERS =================
+function parseAppeal(content) {
+  const parts = content.split("|");
+  const type = parts[0].toLowerCase();
+
+  const data = { type };
+  for (const p of parts.slice(1)) {
+    const [k, v] = p.split("=");
+    data[k] = v;
+  }
+  return data;
+}
+
+// ================= START ===================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🌐 Server running on ${PORT}`);
 });
