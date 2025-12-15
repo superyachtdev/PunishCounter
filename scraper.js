@@ -2,16 +2,21 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 
+// ================= CONFIG =================
 const COOKIES_PATH = "./auth/forum-session.json";
-const CLOSED_URL = "https://invadedlands.net/forums/closed-ban-appeals.40/";
-const OPEN_URL = "https://invadedlands.net/forums/ban-appeals.19/";
+
+const OPEN_URL =
+  "https://invadedlands.net/forums/ban-appeals.19/";
+const CLOSED_URL =
+  "https://invadedlands.net/forums/closed-ban-appeals.40/";
 
 const DATA_DIR = "./data";
-const CLOSED_DATA = `${DATA_DIR}/closed.json`;
-const OPEN_DATA = `${DATA_DIR}/open.json`;
+const OPEN_DATA = path.join(DATA_DIR, "open.json");
+const CLOSED_DATA = path.join(DATA_DIR, "closed.json");
 
 const INTERVAL = 60_000;
 
+// ================= HELPERS =================
 function load(file) {
   if (!fs.existsSync(file)) return new Set();
   return new Set(JSON.parse(fs.readFileSync(file, "utf8")));
@@ -22,33 +27,64 @@ function save(file, set) {
   fs.writeFileSync(file, JSON.stringify([...set], null, 2));
 }
 
+async function waitForCloudflare(page) {
+  await page.waitForFunction(
+    () => !document.title.includes("Just a moment"),
+    { timeout: 60_000 }
+  );
+}
+
+// ================= SCRAPER =================
 async function scrapeOnce(send) {
   console.log("🔍 Scraper tick");
 
-  const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext();
-  await ctx.addCookies(JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8")));
+  const browser = await chromium.launch({
+    headless: false, // ❗ REQUIRED
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-dev-shm-usage"
+    ]
+  });
+
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    locale: "en-US",
+    viewport: { width: 1280, height: 800 }
+  });
+
+  // Load cookies
+  const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8"));
+  await context.addCookies(cookies);
+
+  const page = await context.newPage();
 
   const openSeen = load(OPEN_DATA);
   const closedSeen = load(CLOSED_DATA);
 
-  const page = await ctx.newPage();
+  // ================= OPEN APPEALS =================
+  await page.goto(OPEN_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-  // ---------- OPEN ----------
-  await page.goto(OPEN_URL, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".structItem");
+  console.log("🧭 Page title (open):", await page.title());
+  await waitForCloudflare(page);
 
-  const open = await page.$$eval(".structItem", items =>
+  await page.waitForSelector(".structItem", { timeout: 60_000 });
+
+  const openAppeals = await page.$$eval(".structItem", items =>
     items.map(i => ({
       link: i.querySelector("a")?.href,
-      appealer: i.querySelector(".username")?.innerText,
+      appealer: i.querySelector(".username")?.innerText?.trim(),
       time: i.querySelector("time")?.getAttribute("datetime")
     })).filter(a => a.link && a.appealer)
   );
 
-  for (const a of open) {
+  for (const a of openAppeals) {
     if (openSeen.has(a.link)) continue;
     openSeen.add(a.link);
+
+    console.log("🆕 OPEN APPEAL:", a.appealer);
 
     await send({
       type: "appeal_opened",
@@ -57,25 +93,31 @@ async function scrapeOnce(send) {
     });
   }
 
-  // ---------- CLOSED ----------
-  await page.goto(CLOSED_URL, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".structItem");
+  // ================= CLOSED APPEALS =================
+  await page.goto(CLOSED_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-  const closed = await page.$$eval(".structItem", items =>
+  console.log("🧭 Page title (closed):", await page.title());
+  await waitForCloudflare(page);
+
+  await page.waitForSelector(".structItem", { timeout: 60_000 });
+
+  const closedAppeals = await page.$$eval(".structItem", items =>
     items.map(i => ({
       link: i.querySelector("a")?.href,
-      status: i.querySelector(".label")?.innerText?.toUpperCase(),
-      appealer: i.querySelector(".structItem-parts .username")?.innerText,
-      staff: i.querySelector(".structItem-cell--latest .username")?.innerText,
+      status: i.querySelector(".label")?.innerText?.trim()?.toUpperCase(),
+      appealer: i.querySelector(".structItem-parts .username")?.innerText?.trim(),
+      staff: i.querySelector(".structItem-cell--latest .username")?.innerText?.trim(),
       time: i.querySelector("time")?.getAttribute("datetime")
     })).filter(a => a.link && a.status && a.staff)
   );
 
-  for (const a of closed) {
+  for (const a of closedAppeals) {
     if (closedSeen.has(a.link)) continue;
     if (!["DENIED", "ACCEPTED"].includes(a.status)) continue;
 
     closedSeen.add(a.link);
+
+    console.log("🚨 CLOSED APPEAL:", a.appealer, a.status);
 
     await send({
       type: "appeal_closed",
@@ -92,6 +134,7 @@ async function scrapeOnce(send) {
   await browser.close();
 }
 
+// ================= LOOP =================
 async function startScraper(send) {
   while (true) {
     try {

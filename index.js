@@ -28,17 +28,26 @@ client.once("ready", async () => {
 
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  // START SCRAPER AFTER BOT IS READY
+  // ===== START SCRAPER AFTER BOT IS READY =====
   startScraper(async payload => {
-    const msg =
-      "```appeal\n" +
-      JSON.stringify(payload, null, 2) +
-      "\n```";
+    let msg;
+
+    if (payload.type === "appeal_opened") {
+      msg = `APPEAL_OPENED|appealer=${payload.appealer}|time=${payload.time}`;
+    } else if (payload.type === "appeal_closed") {
+      msg =
+        `APPEAL_CLOSED|staff=${payload.staff}` +
+        `|status=${payload.status}` +
+        `|appealer=${payload.appealer}` +
+        `|time=${payload.time}`;
+    } else {
+      return;
+    }
 
     await channel.send(msg);
-    console.log("📤 Sent appeal to Discord:", payload);
+    console.log("📤 Sent appeal to Discord:", msg);
   });
-});
+}); // ✅ THIS WAS MISSING BEFORE
 
 client.login(process.env.DISCORD_TOKEN);
 
@@ -67,16 +76,11 @@ app.get("/appeals/stream", (req, res) => {
 // ================= DISCORD → MC =================
 client.on("messageCreate", msg => {
   if (msg.channel.id !== CHANNEL_ID) return;
+  if (!msg.content.startsWith("APPEAL_")) return;
 
-  const match = msg.content.match(/```appeal\s*([\s\S]*?)```/);
-  if (!match) return;
+  const payload = parseAppeal(msg.content);
 
-  let payload;
-  try {
-    payload = JSON.parse(match[1]);
-  } catch {
-    return;
-  }
+  console.log("➡️ Forwarding appeal to MC:", payload);
 
   for (const c of appealListeners) {
     c.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -91,7 +95,10 @@ app.get("/leaderboard", async (req, res) => {
     let lastId;
 
     while (messages.length < 1000) {
-      const fetched = await channel.messages.fetch({ limit: 100, before: lastId });
+      const fetched = await channel.messages.fetch({
+        limit: 100,
+        before: lastId
+      });
       if (!fetched.size) break;
       messages.push(...fetched.values());
       lastId = fetched.last().id;
@@ -100,7 +107,12 @@ app.get("/leaderboard", async (req, res) => {
     const counts = {};
     for (const msg of messages) {
       if (!msg.content.startsWith("PUNISH|")) continue;
-      const staff = msg.content.split("|").find(p => p.startsWith("staff="))?.replace("staff=", "");
+
+      const staff = msg.content
+        .split("|")
+        .find(p => p.startsWith("staff="))
+        ?.replace("staff=", "");
+
       if (!staff) continue;
       counts[staff] = (counts[staff] || 0) + 1;
     }
@@ -111,10 +123,24 @@ app.get("/leaderboard", async (req, res) => {
         .sort((a, b) => b.total - a.total)
         .slice(0, 10)
     );
-  } catch {
+  } catch (err) {
+    console.error(err);
     res.status(500).send("Leaderboard error");
   }
 });
+
+// ================= HELPERS =================
+function parseAppeal(content) {
+  const parts = content.split("|");
+  const type = parts[0].toLowerCase();
+
+  const data = { type };
+  for (const p of parts.slice(1)) {
+    const [k, v] = p.split("=");
+    if (k && v) data[k] = v;
+  }
+  return data;
+}
 
 // ================= START =================
 app.listen(PORT, "0.0.0.0", () => {
