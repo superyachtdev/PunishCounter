@@ -4,20 +4,16 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
 
-// =================================================
-// ================= CONFIG ========================
-// =================================================
+// ================= CONFIG =================
 const CHANNEL_ID = "1309957290673180823";
 const PORT = process.env.PORT || 3001;
 
 if (!process.env.DISCORD_TOKEN) {
-  console.error("❌ DISCORD_TOKEN is not set");
+  console.error("DISCORD_TOKEN is not set");
   process.exit(1);
 }
 
-// =================================================
-// =============== DISCORD CLIENT ==================
-// =================================================
+// ================= DISCORD CLIENT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -27,20 +23,16 @@ const client = new Client({
 });
 
 client.once("ready", () => {
-  console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+  console.log(`Discord bot logged in as ${client.user.tag}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
 
-// =================================================
-// =============== EXPRESS SERVER ==================
-// =================================================
+// ================= EXPRESS =================
 const app = express();
 app.use(bodyParser.json());
 
-// =================================================
-// ================= SSE ===========================
-// =================================================
+// ================= SSE =====================
 let appealListeners = [];
 
 app.get("/appeals/stream", (req, res) => {
@@ -50,33 +42,38 @@ app.get("/appeals/stream", (req, res) => {
   res.write("\n");
 
   appealListeners.push(res);
-  console.log("🟢 MC client connected");
+  console.log("MC client connected");
 
   req.on("close", () => {
     appealListeners = appealListeners.filter(r => r !== res);
-    console.log("🔴 MC client disconnected");
+    console.log("MC client disconnected");
   });
 });
 
-// =================================================
-// =========== DISCORD → MC (SSE BRIDGE) ============
-// =================================================
+// ================= DISCORD → MC =================
 client.on("messageCreate", msg => {
   if (msg.channel.id !== CHANNEL_ID) return;
-  if (!msg.content.startsWith("APPEAL_")) return;
 
-  const payload = parseAppeal(msg.content);
+  // Expect JSON inside ```appeal``` block
+  const match = msg.content.match(/```appeal\s*([\s\S]*?)```/);
+  if (!match) return;
 
-  console.log("➡️ Forwarding appeal to MC:", payload);
+  let payload;
+  try {
+    payload = JSON.parse(match[1]);
+  } catch (e) {
+    console.error("Invalid appeal JSON", e);
+    return;
+  }
+
+  console.log("Forwarding appeal to MC:", payload);
 
   for (const c of appealListeners) {
     c.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 });
 
-// =================================================
-// ================= LEADERBOARD ===================
-// =================================================
+// ================= LEADERBOARD =================
 app.get("/leaderboard", async (req, res) => {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
@@ -120,26 +117,7 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// =================================================
-// ================= HELPERS =======================
-// =================================================
-function parseAppeal(content) {
-  const parts = content.split("|");
-  const type = parts[0].toLowerCase(); // appeal_opened / appeal_closed
-
-  const data = { type };
-
-  for (const p of parts.slice(1)) {
-    const [k, v] = p.split("=");
-    if (k && v) data[k] = v;
-  }
-
-  return data;
-}
-
-// =================================================
-// ================= STARTUP =======================
-// =================================================
+// ================= START =================
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Server running on ${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
