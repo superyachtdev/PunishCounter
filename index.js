@@ -3,13 +3,14 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
+const { startScraper } = require("./scraper");
 
 // ================= CONFIG =================
 const CHANNEL_ID = "1309957290673180823";
 const PORT = process.env.PORT || 3001;
 
 if (!process.env.DISCORD_TOKEN) {
-  console.error("DISCORD_TOKEN is not set");
+  console.error("❌ DISCORD_TOKEN is not set");
   process.exit(1);
 }
 
@@ -22,8 +23,21 @@ const client = new Client({
   ]
 });
 
-client.once("ready", () => {
-  console.log(`Discord bot logged in as ${client.user.tag}`);
+client.once("ready", async () => {
+  console.log(`✅ Discord bot logged in as ${client.user.tag}`);
+
+  const channel = await client.channels.fetch(CHANNEL_ID);
+
+  // START SCRAPER AFTER BOT IS READY
+  startScraper(async payload => {
+    const msg =
+      "```appeal\n" +
+      JSON.stringify(payload, null, 2) +
+      "\n```";
+
+    await channel.send(msg);
+    console.log("📤 Sent appeal to Discord:", payload);
+  });
 });
 
 client.login(process.env.DISCORD_TOKEN);
@@ -42,11 +56,11 @@ app.get("/appeals/stream", (req, res) => {
   res.write("\n");
 
   appealListeners.push(res);
-  console.log("MC client connected");
+  console.log("🟢 MC client connected");
 
   req.on("close", () => {
     appealListeners = appealListeners.filter(r => r !== res);
-    console.log("MC client disconnected");
+    console.log("🔴 MC client disconnected");
   });
 });
 
@@ -54,19 +68,15 @@ app.get("/appeals/stream", (req, res) => {
 client.on("messageCreate", msg => {
   if (msg.channel.id !== CHANNEL_ID) return;
 
-  // Expect JSON inside ```appeal``` block
   const match = msg.content.match(/```appeal\s*([\s\S]*?)```/);
   if (!match) return;
 
   let payload;
   try {
     payload = JSON.parse(match[1]);
-  } catch (e) {
-    console.error("Invalid appeal JSON", e);
+  } catch {
     return;
   }
-
-  console.log("Forwarding appeal to MC:", payload);
 
   for (const c of appealListeners) {
     c.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -77,16 +87,11 @@ client.on("messageCreate", msg => {
 app.get("/leaderboard", async (req, res) => {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return res.status(500).send("Channel not found");
-
     let messages = [];
     let lastId;
 
     while (messages.length < 1000) {
-      const fetched = await channel.messages.fetch({
-        limit: 100,
-        before: lastId
-      });
+      const fetched = await channel.messages.fetch({ limit: 100, before: lastId });
       if (!fetched.size) break;
       messages.push(...fetched.values());
       lastId = fetched.last().id;
@@ -95,12 +100,7 @@ app.get("/leaderboard", async (req, res) => {
     const counts = {};
     for (const msg of messages) {
       if (!msg.content.startsWith("PUNISH|")) continue;
-
-      const staff = msg.content
-        .split("|")
-        .find(p => p.startsWith("staff="))
-        ?.replace("staff=", "");
-
+      const staff = msg.content.split("|").find(p => p.startsWith("staff="))?.replace("staff=", "");
       if (!staff) continue;
       counts[staff] = (counts[staff] || 0) + 1;
     }
@@ -111,13 +111,12 @@ app.get("/leaderboard", async (req, res) => {
         .sort((a, b) => b.total - a.total)
         .slice(0, 10)
     );
-  } catch (e) {
-    console.error(e);
+  } catch {
     res.status(500).send("Leaderboard error");
   }
 });
 
 // ================= START =================
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on ${PORT}`);
+  console.log(`🌐 Server running on ${PORT}`);
 });
