@@ -4,15 +4,12 @@ const path = require("path");
 
 // ================= CONFIG =================
 const COOKIES_PATH = "./auth/forum-session.json";
-
-const OPEN_URL =
-  "https://invadedlands.net/forums/ban-appeals.19/";
-const CLOSED_URL =
-  "https://invadedlands.net/forums/closed-ban-appeals.40/";
+const CLOSED_URL = "https://invadedlands.net/forums/closed-ban-appeals.40/";
+const OPEN_URL = "https://invadedlands.net/forums/ban-appeals.19/";
 
 const DATA_DIR = "./data";
-const OPEN_DATA = path.join(DATA_DIR, "open.json");
-const CLOSED_DATA = path.join(DATA_DIR, "closed.json");
+const CLOSED_DATA = `${DATA_DIR}/closed.json`;
+const OPEN_DATA = `${DATA_DIR}/open.json`;
 
 const INTERVAL = 60_000;
 
@@ -27,23 +24,17 @@ function save(file, set) {
   fs.writeFileSync(file, JSON.stringify([...set], null, 2));
 }
 
-async function waitForCloudflare(page) {
-  await page.waitForFunction(
-    () => !document.title.includes("Just a moment"),
-    { timeout: 60_000 }
-  );
-}
-
 // ================= SCRAPER =================
 async function scrapeOnce(send) {
   console.log("🔍 Scraper tick");
 
   const browser = await chromium.launch({
-    headless: false, // ❗ REQUIRED
+    headless: true,                 // ✅ REQUIRED ON RAILWAY
     args: [
-      "--disable-blink-features=AutomationControlled",
       "--no-sandbox",
-      "--disable-dev-shm-usage"
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled"
     ]
   });
 
@@ -51,13 +42,13 @@ async function scrapeOnce(send) {
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    locale: "en-US",
     viewport: { width: 1280, height: 800 }
   });
 
-  // Load cookies
-  const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8"));
-  await context.addCookies(cookies);
+  // Load forum cookies
+  await context.addCookies(
+    JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8"))
+  );
 
   const page = await context.newPage();
 
@@ -67,15 +58,14 @@ async function scrapeOnce(send) {
   // ================= OPEN APPEALS =================
   await page.goto(OPEN_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-  console.log("🧭 Page title (open):", await page.title());
-  await waitForCloudflare(page);
-
-  await page.waitForSelector(".structItem", { timeout: 60_000 });
+  if (await page.locator(".structItem").count() === 0) {
+    console.warn("⚠️ No open appeals found (possible Cloudflare)");
+  }
 
   const openAppeals = await page.$$eval(".structItem", items =>
     items.map(i => ({
       link: i.querySelector("a")?.href,
-      appealer: i.querySelector(".username")?.innerText?.trim(),
+      appealer: i.querySelector(".username")?.innerText,
       time: i.querySelector("time")?.getAttribute("datetime")
     })).filter(a => a.link && a.appealer)
   );
@@ -83,8 +73,6 @@ async function scrapeOnce(send) {
   for (const a of openAppeals) {
     if (openSeen.has(a.link)) continue;
     openSeen.add(a.link);
-
-    console.log("🆕 OPEN APPEAL:", a.appealer);
 
     await send({
       type: "appeal_opened",
@@ -96,17 +84,12 @@ async function scrapeOnce(send) {
   // ================= CLOSED APPEALS =================
   await page.goto(CLOSED_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-  console.log("🧭 Page title (closed):", await page.title());
-  await waitForCloudflare(page);
-
-  await page.waitForSelector(".structItem", { timeout: 60_000 });
-
   const closedAppeals = await page.$$eval(".structItem", items =>
     items.map(i => ({
       link: i.querySelector("a")?.href,
-      status: i.querySelector(".label")?.innerText?.trim()?.toUpperCase(),
-      appealer: i.querySelector(".structItem-parts .username")?.innerText?.trim(),
-      staff: i.querySelector(".structItem-cell--latest .username")?.innerText?.trim(),
+      status: i.querySelector(".label")?.innerText?.toUpperCase(),
+      appealer: i.querySelector(".structItem-parts .username")?.innerText,
+      staff: i.querySelector(".structItem-cell--latest .username")?.innerText,
       time: i.querySelector("time")?.getAttribute("datetime")
     })).filter(a => a.link && a.status && a.staff)
   );
@@ -116,8 +99,6 @@ async function scrapeOnce(send) {
     if (!["DENIED", "ACCEPTED"].includes(a.status)) continue;
 
     closedSeen.add(a.link);
-
-    console.log("🚨 CLOSED APPEAL:", a.appealer, a.status);
 
     await send({
       type: "appeal_closed",
