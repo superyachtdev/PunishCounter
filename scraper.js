@@ -4,94 +4,102 @@ const path = require("path");
 const fetch = require("node-fetch");
 
 const COOKIES_PATH = "./auth/forum-session.json";
-const APPEALS_URL = "https://invadedlands.net/forums/closed-ban-appeals.40/";
-const DATA_PATH = "./data/processed-appeals.json";
+const CLOSED_URL = "https://invadedlands.net/forums/closed-ban-appeals.40/";
+const OPEN_URL = "https://invadedlands.net/forums/ban-appeals.19/";
 
-// 🔐 Discord webhook for appeals
-if (!process.env.APPEALS_WEBHOOK_URL) {
-  console.error("❌ APPEALS_WEBHOOK_URL not set");
-  process.exit(1);
-}
+const DATA_DIR = "./data";
+const CLOSED_DATA = `${DATA_DIR}/closed.json`;
+const OPEN_DATA = `${DATA_DIR}/open.json`;
 
+const WEBHOOK_URL = "YOUR_WEBHOOK_URL_HERE";
 const INTERVAL = 60_000;
 
-function loadProcessed() {
-  if (!fs.existsSync(DATA_PATH)) return new Set();
-  return new Set(JSON.parse(fs.readFileSync(DATA_PATH, "utf8")));
+function load(file) {
+  if (!fs.existsSync(file)) return new Set();
+  return new Set(JSON.parse(fs.readFileSync(file)));
 }
 
-function saveProcessed(set) {
-  fs.mkdirSync(path.dirname(DATA_PATH), { recursive: true });
-  fs.writeFileSync(DATA_PATH, JSON.stringify([...set], null, 2));
+function save(file, set) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify([...set], null, 2));
 }
 
-async function sendToDiscord(content) {
-  await fetch(process.env.APPEALS_WEBHOOK_URL, {
+async function send(msg) {
+  await fetch(WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ content: msg })
   });
 }
 
-async function scrapeOnce() {
-  console.log("🔍 Scraper tick");
-
+async function scrape() {
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const ctx = await browser.newContext();
+  await ctx.addCookies(JSON.parse(fs.readFileSync(COOKIES_PATH)));
 
-  await context.addCookies(
-    JSON.parse(fs.readFileSync(COOKIES_PATH, "utf8"))
+  const closedSeen = load(CLOSED_DATA);
+  const openSeen = load(OPEN_DATA);
+
+  const page = await ctx.newPage();
+
+  // ---------- OPEN ----------
+  await page.goto(OPEN_URL, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".structItem");
+
+  const open = await page.$$eval(".structItem", items =>
+    items.map(i => ({
+      link: i.querySelector("a")?.href,
+      appealer: i.querySelector(".username")?.innerText,
+      time: i.querySelector("time")?.getAttribute("datetime")
+    })).filter(Boolean)
   );
 
-  const page = await context.newPage();
-  await page.goto(APPEALS_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
+  for (const a of open) {
+    if (openSeen.has(a.link)) continue;
+    openSeen.add(a.link);
 
-  await page.waitForSelector(".structItem", { timeout: 30000 });
-
-  const processed = loadProcessed();
-
-  const appeals = await page.$$eval(".structItem", items =>
-    items.map(item => {
-      const link = item.querySelector(".structItem-title a")?.href;
-      const status = item.querySelector(".label")?.innerText?.trim().toUpperCase();
-      const appealer = item.querySelector(".structItem-parts .username")?.innerText?.trim();
-      const staff = item.querySelector(".structItem-cell--latest .username")?.innerText?.trim();
-      const time = item.querySelector("time")?.getAttribute("datetime");
-
-      if (!link || !status || !appealer || !staff || !time) return null;
-      return { link, status, appealer, staff, time };
-    }).filter(Boolean)
-  );
-
-  for (const a of appeals) {
-    if (processed.has(a.link)) continue;
-    if (!["DENIED", "ACCEPTED"].includes(a.status)) continue;
-
-    processed.add(a.link);
-
-    const msg =
-      `APPEAL_CLOSED|staff=${a.staff}` +
-      `|status=${a.status}` +
-      `|appealer=${a.appealer}` +
-      `|time=${a.time}`;
-
-    await sendToDiscord(msg);
-    console.log("🚨 Sent to Discord:", msg);
+    await send(
+      `APPEAL_OPENED|appealer=${a.appealer}|time=${a.time}`
+    );
   }
 
-  saveProcessed(processed);
+  // ---------- CLOSED ----------
+  await page.goto(CLOSED_URL, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".structItem");
+
+  const closed = await page.$$eval(".structItem", items =>
+    items.map(i => ({
+      link: i.querySelector("a")?.href,
+      status: i.querySelector(".label")?.innerText?.toUpperCase(),
+      appealer: i.querySelector(".structItem-parts .username")?.innerText,
+      staff: i.querySelector(".structItem-cell--latest .username")?.innerText,
+      time: i.querySelector("time")?.getAttribute("datetime")
+    })).filter(Boolean)
+  );
+
+  for (const a of closed) {
+    if (closedSeen.has(a.link)) continue;
+    if (!["DENIED", "ACCEPTED"].includes(a.status)) continue;
+
+    closedSeen.add(a.link);
+
+    await send(
+      `APPEAL_CLOSED|staff=${a.staff}|status=${a.status}|appealer=${a.appealer}|time=${a.time}`
+    );
+  }
+
+  save(OPEN_DATA, openSeen);
+  save(CLOSED_DATA, closedSeen);
+
   await browser.close();
 }
 
 (async () => {
   while (true) {
     try {
-      await scrapeOnce();
+      await scrape();
     } catch (e) {
-      console.error("SCRAPER ERROR:", e);
+      console.error("SCRAPER ERROR", e);
     }
     await new Promise(r => setTimeout(r, INTERVAL));
   }

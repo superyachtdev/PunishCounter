@@ -4,6 +4,9 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
 
+// =================================================
+// ================= CONFIG ========================
+// =================================================
 const CHANNEL_ID = "1309957290673180823";
 const PORT = process.env.PORT || 3001;
 
@@ -12,6 +15,9 @@ if (!process.env.DISCORD_TOKEN) {
   process.exit(1);
 }
 
+// =================================================
+// =============== DISCORD CLIENT ==================
+// =================================================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -26,11 +32,15 @@ client.once("ready", () => {
 
 client.login(process.env.DISCORD_TOKEN);
 
-// ================= EXPRESS =================
+// =================================================
+// =============== EXPRESS SERVER ==================
+// =================================================
 const app = express();
 app.use(bodyParser.json());
 
-// ================= SSE =====================
+// =================================================
+// ================= SSE ===========================
+// =================================================
 let appealListeners = [];
 
 app.get("/appeals/stream", (req, res) => {
@@ -48,22 +58,30 @@ app.get("/appeals/stream", (req, res) => {
   });
 });
 
-// ================= DISCORD → SSE =================
+// =================================================
+// =========== DISCORD → MC (SSE BRIDGE) ============
+// =================================================
 client.on("messageCreate", msg => {
   if (msg.channel.id !== CHANNEL_ID) return;
   if (!msg.content.startsWith("APPEAL_")) return;
 
   const payload = parseAppeal(msg.content);
 
+  console.log("➡️ Forwarding appeal to MC:", payload);
+
   for (const c of appealListeners) {
     c.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 });
 
-// ================= LEADERBOARD =================
+// =================================================
+// ================= LEADERBOARD ===================
+// =================================================
 app.get("/leaderboard", async (req, res) => {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
+    if (!channel) return res.status(500).send("Channel not found");
+
     let messages = [];
     let lastId;
 
@@ -102,20 +120,26 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// ================= HELPERS =================
+// =================================================
+// ================= HELPERS =======================
+// =================================================
 function parseAppeal(content) {
   const parts = content.split("|");
-  const type = parts[0].toLowerCase();
+  const type = parts[0].toLowerCase(); // appeal_opened / appeal_closed
 
   const data = { type };
+
   for (const p of parts.slice(1)) {
     const [k, v] = p.split("=");
-    data[k] = v;
+    if (k && v) data[k] = v;
   }
+
   return data;
 }
 
-// ================= START ===================
+// =================================================
+// ================= STARTUP =======================
+// =================================================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🌐 Server running on ${PORT}`);
 });
