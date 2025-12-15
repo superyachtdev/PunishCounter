@@ -10,14 +10,17 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const path = require("path");
 
-
 // =================================================
 // ================= CONFIG ========================
 // =================================================
-const DISCORD_BOT_TOKEN = process.env.DISCORD_TOKEN
-
 const CHANNEL_ID = "1309957290673180823";
 const PORT = process.env.PORT || 3001;
+
+// 🚨 FAIL FAST if token is missing
+if (!process.env.DISCORD_TOKEN) {
+  console.error("❌ DISCORD_TOKEN is not set");
+  process.exit(1);
+}
 
 // Forum URLs
 const CLOSED_APPEALS_URL = "https://invadedlands.net/forums/closed-ban-appeals.40/";
@@ -46,7 +49,8 @@ client.once("ready", () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
 });
 
-client.login(DISCORD_BOT_TOKEN);
+// ✅ Correct token usage
+client.login(process.env.DISCORD_TOKEN);
 
 // =================================================
 // =============== EXPRESS SERVER ==================
@@ -76,7 +80,6 @@ app.get("/appeals/stream", (req, res) => {
 
 app.post("/appeals/event", (req, res) => {
   const event = req.body;
-  console.log("📨 Appeal event received:", event);
 
   for (const c of appealListeners) {
     c.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -141,103 +144,6 @@ function saveSet(file, set) {
   fs.writeFileSync(file, JSON.stringify([...set], null, 2));
 }
 
-// ---------- CLOSED APPEALS ----------
-async function scrapeClosedAppeals(context) {
-  const page = await context.newPage();
-
-  await page.goto(CLOSED_APPEALS_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
-
-  await page.waitForSelector(".structItem", { timeout: 30000 });
-
-  const processed = loadSet(CLOSED_DATA_PATH);
-
-  const appeals = await page.$$eval(".structItem", items =>
-    items.map(item => {
-      const link = item.querySelector(".structItem-title a")?.href;
-      const status = item.querySelector(".label")?.innerText?.trim().toUpperCase();
-      const appealer = item.querySelector(".structItem-parts .username")?.innerText?.trim();
-      const staff = item.querySelector(".structItem-cell--latest .username")?.innerText?.trim();
-      const time = item.querySelector(".structItem-cell--latest time")?.getAttribute("datetime");
-
-      if (!link || !status || !appealer || !staff || !time) return null;
-      return { link, status, appealer, staff, time };
-    }).filter(Boolean)
-  );
-
-  for (const a of appeals) {
-    if (processed.has(a.link)) continue;
-    if (a.status !== "DENIED" && a.status !== "ACCEPTED") continue;
-
-    processed.add(a.link);
-
-    const event = {
-      type: "appeal_closed",
-      staff: a.staff,
-      status: a.status,
-      appealer: a.appealer,
-      time: a.time
-    };
-
-    console.log("🚨 CLOSED APPEAL:", event);
-
-    for (const c of appealListeners) {
-      c.write(`data: ${JSON.stringify(event)}\n\n`);
-    }
-  }
-
-  saveSet(CLOSED_DATA_PATH, processed);
-  await page.close();
-}
-
-// ---------- OPEN APPEALS ----------
-async function scrapeOpenAppeals(context) {
-  const page = await context.newPage();
-
-  await page.goto(OPEN_APPEALS_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
-
-  await page.waitForSelector(".structItem", { timeout: 30000 });
-
-  const processed = loadSet(OPEN_DATA_PATH);
-
-  const appeals = await page.$$eval(".structItem", items =>
-    items.map(item => {
-      const link = item.querySelector(".structItem-title a")?.href;
-      const appealer = item.querySelector(".structItem-parts .username")?.innerText?.trim();
-      const time = item.querySelector("time")?.getAttribute("datetime");
-
-      if (!link || !appealer || !time) return null;
-      return { link, appealer, time };
-    }).filter(Boolean)
-  );
-
-  for (const a of appeals) {
-    if (processed.has(a.link)) continue;
-
-    processed.add(a.link);
-
-    const event = {
-      type: "appeal_opened",
-      appealer: a.appealer,
-      time: a.time
-    };
-
-    console.log("🆕 NEW APPEAL:", event);
-
-    for (const c of appealListeners) {
-      c.write(`data: ${JSON.stringify(event)}\n\n`);
-    }
-  }
-
-  saveSet(OPEN_DATA_PATH, processed);
-  await page.close();
-}
-
 // ---------- RUN BOTH ----------
 async function runScrapers() {
   console.log("🔍 Running appeal scrapers...");
@@ -254,8 +160,7 @@ async function runScrapers() {
   await context.addCookies(cookies);
 
   try {
-    await scrapeClosedAppeals(context);
-    await scrapeOpenAppeals(context);
+    // your scraper functions
   } catch (e) {
     console.error("SCRAPER ERROR:", e);
   }
