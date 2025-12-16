@@ -1,22 +1,15 @@
-const fetch = require("node-fetch");
 const fs = require("fs");
 const path = require("path");
 
+// Node 18+ has global fetch
+const fetch = global.fetch;
+
 // ================= CONFIG =================
-const OPEN_APPEALS_RSS =
-  "https://invadedlands.net/forums/ban-appeals.19/index.rss";
-
-const CLOSED_APPEALS_RSS =
-  "https://invadedlands.net/forums/closed-ban-appeals.40/index.rss";
-
 const REPORTS_RSS =
   "https://invadedlands.net/forums/player-reports.18/index.rss";
 
 const DATA_DIR = "./data";
-const OPEN_DATA = path.join(DATA_DIR, "open.json");
-const CLOSED_DATA = path.join(DATA_DIR, "closed.json");
 const REPORTS_DATA = path.join(DATA_DIR, "reports.json");
-
 const INTERVAL = 60_000;
 
 // ================= HELPERS =================
@@ -30,107 +23,67 @@ function save(file, set) {
   fs.writeFileSync(file, JSON.stringify([...set], null, 2));
 }
 
-function extractTag(xml, tag) {
-  const match = xml.match(new RegExp(`<${tag}>(.*?)</${tag}>`, "s"));
-  return match ? match[1].trim() : "";
+function extract(tag, block) {
+  const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
+  return m ? m[1].trim() : "";
 }
 
-function extractCDATA(xml, tag) {
-  const match = xml.match(
-    new RegExp(`<${tag}><!\\[CDATA\\[(.*?)\\]\\]></${tag}>`, "s")
-  );
-  return match ? match[1].trim() : "";
-}
-
-// ================= RSS FETCH =================
-async function scrapeFeed(url) {
-  const res = await fetch(url, {
+// ================= RSS PARSER =================
+async function fetchReports() {
+  const res = await fetch(REPORTS_RSS, {
     headers: { "User-Agent": "Mozilla/5.0" }
   });
 
   const xml = await res.text();
 
-  return xml.split("<item>").slice(1).map(item => ({
-    title: extractTag(item, "title"),
-    link: extractTag(item, "link"),
-    time: extractTag(item, "pubDate"),
-    author:
-      extractTag(item, "dc:creator") ||
-      extractTag(item, "author")
-  }));
+  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => {
+    const block = m[1];
+    return {
+      title: extract("title", block),
+      link: extract("link", block),
+      time: extract("pubDate", block)
+    };
+  });
+
+  return items;
 }
 
 // ================= LOOP =================
 async function startRSSScraper(send) {
   console.log("🚀 RSS scraper started");
 
-  const openSeen = load(OPEN_DATA);
-  const closedSeen = load(CLOSED_DATA);
-  const reportSeen = load(REPORTS_DATA);
+  const seen = load(REPORTS_DATA);
 
   while (true) {
     try {
       console.log("🔍 RSS scraper tick");
 
-      // ===== OPEN APPEALS =====
-      const open = await scrapeFeed(OPEN_APPEALS_RSS);
-      for (const i of open) {
-        if (openSeen.has(i.link)) continue;
-        openSeen.add(i.link);
+      const reports = await fetchReports();
+      console.log(`📄 RSS items fetched: ${reports.length}`);
+
+      for (const r of reports) {
+        if (!r.link) continue;
+
+        if (seen.has(r.link)) {
+          console.log("↩️ Skipping known report:", r.link);
+          continue;
+        }
+
+        console.log("🆕 NEW report detected:", r.link);
+
+        seen.add(r.link);
 
         await send({
-          type: "appeal_opened",
-          appealer: i.title,
-          time: i.time
+          type: "report_opened",
+          title: r.title,
+          link: r.link,
+          time: r.time
         });
       }
 
-      // ===== CLOSED APPEALS =====
-      const closed = await scrapeFeed(CLOSED_APPEALS_RSS);
-      for (const i of closed) {
-        if (closedSeen.has(i.link)) continue;
-        closedSeen.add(i.link);
-
-        await send({
-          type: "appeal_closed",
-          appealer: i.title,
-          status: "CLOSED",
-          time: i.time
-        });
-      }
-
-      // ===== PLAYER REPORTS =====
-      // ===== REPORTS =====
-const reports = await scrapeFeed(REPORTS_RSS);
-
-console.log(`[RSS] Reports fetched: ${reports.length}`);
-console.log(`[RSS] Reports already seen: ${reportSeen.size}`);
-
-for (const item of reports) {
-  if (reportSeen.has(item.link)) {
-    console.log(`[RSS] Skipping existing report: ${item.link}`);
-    continue;
-  }
-
-  console.log(`[RSS] NEW report detected: ${item.link}`);
-
-  reportSeen.add(item.link);
-
-  await send({
-    type: "report_opened",
-    title: item.title,
-    link: item.link,
-    time: item.pubDate
-  });
-}
-
-
-      save(OPEN_DATA, openSeen);
-      save(CLOSED_DATA, closedSeen);
-      save(REPORTS_DATA, reportSeen);
-
+      save(REPORTS_DATA, seen);
     } catch (e) {
-      console.error("❌ RSS SCRAPER ERROR:", e.message);
+      console.error("❌ RSS SCRAPER ERROR:", e);
     }
 
     await new Promise(r => setTimeout(r, INTERVAL));
