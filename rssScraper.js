@@ -3,10 +3,12 @@ const fs = require("fs");
 const path = require("path");
 
 // ================= CONFIG =================
-const OPEN_RSS =
+const OPEN_APPEALS_RSS =
   "https://invadedlands.net/forums/ban-appeals.19/index.rss";
-const CLOSED_RSS =
+
+const CLOSED_APPEALS_RSS =
   "https://invadedlands.net/forums/closed-ban-appeals.40/index.rss";
+
 const REPORTS_RSS =
   "https://invadedlands.net/forums/player-reports.18/index.rss";
 
@@ -33,16 +35,28 @@ function extractTag(xml, tag) {
   return match ? match[1].trim() : "";
 }
 
+function extractCDATA(xml, tag) {
+  const match = xml.match(
+    new RegExp(`<${tag}><!\\[CDATA\\[(.*?)\\]\\]></${tag}>`, "s")
+  );
+  return match ? match[1].trim() : "";
+}
+
+// ================= RSS FETCH =================
 async function scrapeFeed(url) {
   const res = await fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0" }
   });
+
   const xml = await res.text();
 
-  return xml.split("<item>").slice(1).map(i => ({
-    title: extractTag(i, "title"),
-    link: extractTag(i, "link"),
-    pubDate: extractTag(i, "pubDate")
+  return xml.split("<item>").slice(1).map(item => ({
+    title: extractTag(item, "title"),
+    link: extractTag(item, "link"),
+    time: extractTag(item, "pubDate"),
+    author:
+      extractTag(item, "dc:creator") ||
+      extractTag(item, "author")
   }));
 }
 
@@ -52,50 +66,58 @@ async function startRSSScraper(send) {
 
   const openSeen = load(OPEN_DATA);
   const closedSeen = load(CLOSED_DATA);
-  const reportsSeen = load(REPORTS_DATA);
+  const reportSeen = load(REPORTS_DATA);
 
   while (true) {
     try {
       console.log("🔍 RSS scraper tick");
 
-      for (const item of await scrapeFeed(OPEN_RSS)) {
-        if (openSeen.has(item.link)) continue;
-        openSeen.add(item.link);
+      // ===== OPEN APPEALS =====
+      const open = await scrapeFeed(OPEN_APPEALS_RSS);
+      for (const i of open) {
+        if (openSeen.has(i.link)) continue;
+        openSeen.add(i.link);
 
         await send({
           type: "appeal_opened",
-          appealer: item.title,
-          time: item.pubDate
+          appealer: i.title,
+          time: i.time
         });
       }
 
-      for (const item of await scrapeFeed(CLOSED_RSS)) {
-        if (closedSeen.has(item.link)) continue;
-        closedSeen.add(item.link);
+      // ===== CLOSED APPEALS =====
+      const closed = await scrapeFeed(CLOSED_APPEALS_RSS);
+      for (const i of closed) {
+        if (closedSeen.has(i.link)) continue;
+        closedSeen.add(i.link);
 
         await send({
           type: "appeal_closed",
+          appealer: i.title,
           status: "CLOSED",
-          appealer: item.title,
-          time: item.pubDate
+          time: i.time
         });
       }
 
-      for (const item of await scrapeFeed(REPORTS_RSS)) {
-        if (reportsSeen.has(item.link)) continue;
-        reportsSeen.add(item.link);
+      // ===== PLAYER REPORTS =====
+      const reports = await scrapeFeed(REPORTS_RSS);
+      for (const r of reports) {
+        if (reportSeen.has(r.link)) continue;
+        reportSeen.add(r.link);
 
         await send({
           type: "report_opened",
-          title: item.title,
-          link: item.link,
-          time: item.pubDate
+          title: r.title,
+          author: r.author,
+          link: r.link,
+          time: r.time
         });
       }
 
       save(OPEN_DATA, openSeen);
       save(CLOSED_DATA, closedSeen);
-      save(REPORTS_DATA, reportsSeen);
+      save(REPORTS_DATA, reportSeen);
+
     } catch (e) {
       console.error("❌ RSS SCRAPER ERROR:", e.message);
     }
