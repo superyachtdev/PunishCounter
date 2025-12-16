@@ -1,57 +1,54 @@
-const { HttpsProxyAgent } = require("https-proxy-agent");
-
-// Node 18+ global fetch
-const fetch = global.fetch;
+const fs = require("fs");
+const path = require("path");
 
 // ================= CONFIG =================
 const REPORTS_RSS =
   "https://invadedlands.net/forums/player-reports.18/index.rss";
 
+const DATA_DIR = "./data";
 const INTERVAL = 60_000;
 
-// 🔴 BRIGHT DATA PROXY (EXACT)
-const PROXY_URL =
-  "http://brd-customer-hl_d0683e82-zone-punishcounter:n49pu21tmjy3@brd.superproxy.io:33335";
+const BRIGHTDATA_API = "https://api.brightdata.com/request";
+const BRIGHTDATA_KEY = process.env.BRIGHTDATA_API_KEY;
+const BRIGHTDATA_ZONE = process.env.BRIGHTDATA_ZONE;
 
-// ================= FETCH =================
-async function fetchRSS() {
-  const agent = new HttpsProxyAgent(PROXY_URL);
+// ================= SAFETY CHECK =================
+if (!BRIGHTDATA_KEY || !BRIGHTDATA_ZONE) {
+  throw new Error("❌ Bright Data credentials not set");
+}
 
-  const res = await fetch(REPORTS_RSS, {
-    agent,
+// ================= RSS FETCH =================
+async function fetchViaBrightData(url) {
+  const res = await fetch(BRIGHTDATA_API, {
+    method: "POST",
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept":
-        "application/rss+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache"
-    }
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${BRIGHTDATA_KEY}`
+    },
+    body: JSON.stringify({
+      zone: BRIGHTDATA_ZONE,
+      url,
+      format: "raw"
+    })
   });
 
   const text = await res.text();
-
-  console.log("🧪 RSS HTTP status:", res.status);
-  console.log("🧪 RSS preview:\n", text.slice(0, 500));
-
   return text;
 }
 
-// ================= PARSER =================
-function parseItems(xml) {
-  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+// ================= RSS PARSER =================
+function extract(tag, block) {
+  const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
+  return m ? m[1].trim() : "";
+}
 
-  return items.map(m => {
+function parseRSS(xml) {
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => {
     const block = m[1];
-    const extract = tag =>
-      (block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)) || [])[1]?.trim();
-
     return {
-      title: extract("title"),
-      link: extract("link"),
-      time: extract("pubDate")
+      title: extract("title", block),
+      link: extract("link", block),
+      time: extract("pubDate", block)
     };
   });
 }
@@ -64,14 +61,17 @@ async function startRSSScraper(send) {
     try {
       console.log("🔍 RSS scraper tick");
 
-      const xml = await fetchRSS();
-      const items = parseItems(xml);
+      const xml = await fetchViaBrightData(REPORTS_RSS);
 
+      if (!xml.includes("<rss")) {
+        console.error("❌ Not RSS XML (Cloudflare HTML received)");
+        console.log(xml.slice(0, 300));
+      }
+
+      const items = parseRSS(xml);
       console.log(`📄 RSS items parsed: ${items.length}`);
 
       for (const item of items) {
-        console.log("📨 Sending:", item.link);
-
         await send({
           type: "report_opened",
           title: item.title,
@@ -79,8 +79,8 @@ async function startRSSScraper(send) {
           time: item.time
         });
       }
-    } catch (err) {
-      console.error("❌ RSS SCRAPER ERROR:", err.message);
+    } catch (e) {
+      console.error("❌ RSS SCRAPER ERROR:", e.message);
     }
 
     console.log("⏳ Sleeping 60s");
