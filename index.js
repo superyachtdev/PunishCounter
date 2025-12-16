@@ -61,16 +61,19 @@ client.once("ready", async () => {
 
     if (payload.type === "appeal_opened") {
       msg = `APPEAL_OPENED|appealer=${payload.appealer}|time=${payload.time}`;
+
     } else if (payload.type === "appeal_closed") {
       msg =
-        `APPEAL_CLOSED|status=${payload.status}` +
+        `APPEAL_CLOSED|status=${payload.status || "CLOSED"}` +
         `|appealer=${payload.appealer}` +
         `|time=${payload.time}`;
+
     } else if (payload.type === "report_opened") {
       msg =
         `REPORT_OPENED|title=${payload.title}` +
         `|link=${payload.link}` +
         `|time=${payload.time}`;
+
     } else {
       return;
     }
@@ -85,6 +88,7 @@ client.login(process.env.DISCORD_TOKEN);
 // ================= DISCORD → MC =================
 client.on("messageCreate", msg => {
   if (msg.channel.id !== CHANNEL_ID) return;
+
   if (
     !msg.content.startsWith("APPEAL_") &&
     !msg.content.startsWith("REPORT_")
@@ -102,11 +106,16 @@ client.on("messageCreate", msg => {
 app.get("/leaderboard", async (req, res) => {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
+    if (!channel) return res.status(500).send("Channel not found");
+
     let messages = [];
     let lastId;
 
     while (messages.length < 1000) {
-      const fetched = await channel.messages.fetch({ limit: 100, before: lastId });
+      const fetched = await channel.messages.fetch({
+        limit: 100,
+        before: lastId
+      });
       if (!fetched.size) break;
       messages.push(...fetched.values());
       lastId = fetched.last().id;
