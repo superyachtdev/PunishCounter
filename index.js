@@ -3,7 +3,7 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
-const { startRSSScraper } = require("./rssScraper");
+const { startRSSScraper } = require("./rssscraper");
 
 // ================= CONFIG =================
 const CHANNEL_ID = "1309957290673180823";
@@ -66,12 +66,17 @@ client.once("ready", async () => {
         `APPEAL_CLOSED|status=${payload.status}` +
         `|appealer=${payload.appealer}` +
         `|time=${payload.time}`;
+    } else if (payload.type === "report_opened") {
+      msg =
+        `REPORT_OPENED|title=${payload.title}` +
+        `|link=${payload.link}` +
+        `|time=${payload.time}`;
     } else {
       return;
     }
 
     await channel.send(msg);
-    console.log("📤 Sent appeal to Discord:", msg);
+    console.log("📤 Sent to Discord:", msg);
   });
 });
 
@@ -80,10 +85,13 @@ client.login(process.env.DISCORD_TOKEN);
 // ================= DISCORD → MC =================
 client.on("messageCreate", msg => {
   if (msg.channel.id !== CHANNEL_ID) return;
-  if (!msg.content.startsWith("APPEAL_")) return;
+  if (
+    !msg.content.startsWith("APPEAL_") &&
+    !msg.content.startsWith("REPORT_")
+  ) return;
 
-  const payload = parseAppeal(msg.content);
-  console.log("➡️ Forwarding appeal to MC:", payload);
+  const payload = parseEvent(msg.content);
+  console.log("➡️ Forwarding to MC:", payload);
 
   for (const c of appealListeners) {
     c.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -94,16 +102,11 @@ client.on("messageCreate", msg => {
 app.get("/leaderboard", async (req, res) => {
   try {
     const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return res.status(500).send("Channel not found");
-
     let messages = [];
     let lastId;
 
     while (messages.length < 1000) {
-      const fetched = await channel.messages.fetch({
-        limit: 100,
-        before: lastId
-      });
+      const fetched = await channel.messages.fetch({ limit: 100, before: lastId });
       if (!fetched.size) break;
       messages.push(...fetched.values());
       lastId = fetched.last().id;
@@ -135,7 +138,7 @@ app.get("/leaderboard", async (req, res) => {
 });
 
 // ================= HELPERS =================
-function parseAppeal(content) {
+function parseEvent(content) {
   const parts = content.split("|");
   const type = parts[0].toLowerCase();
 
