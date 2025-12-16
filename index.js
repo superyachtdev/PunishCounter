@@ -150,16 +150,22 @@ app.get("/leaderboard", async (req, res) => {
 
 // ================= HELPERS =================
 function parseEvent(content) {
-  const parts = content.split("|");
+  const parts = content.split(/\|/); // ✅ FIXED
   const type = parts[0].toLowerCase();
 
   const data = { type };
   for (const p of parts.slice(1)) {
-    const [k, v] = p.split("=");
-    if (k && v) data[k] = v;
+    const idx = p.indexOf("=");
+    if (idx === -1) continue;
+
+    const key = p.slice(0, idx);
+    const val = p.slice(idx + 1);
+    data[key] = val;
   }
+
   return data;
 }
+
 
 // ================= START =================
 app.listen(PORT, "0.0.0.0", () => {
