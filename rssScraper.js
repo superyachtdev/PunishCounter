@@ -1,153 +1,107 @@
-require("dotenv").config();
-
-const { Client, GatewayIntentBits } = require("discord.js");
-const express = require("express");
-const bodyParser = require("body-parser");
-const { startRSSScraper } = require("./rssScraper");
+const fetch = require("node-fetch");
+const fs = require("fs");
+const path = require("path");
 
 // ================= CONFIG =================
-const CHANNEL_ID = "1309957290673180823";
-const PORT = process.env.PORT || 3001;
+const OPEN_RSS =
+  "https://invadedlands.net/forums/ban-appeals.19/index.rss";
+const CLOSED_RSS =
+  "https://invadedlands.net/forums/closed-ban-appeals.40/index.rss";
+const REPORTS_RSS =
+  "https://invadedlands.net/forums/player-reports.18/index.rss";
 
-if (!process.env.DISCORD_TOKEN) {
-  console.error("❌ DISCORD_TOKEN is not set");
-  process.exit(1);
-}
+const DATA_DIR = "./data";
+const OPEN_DATA = path.join(DATA_DIR, "open.json");
+const CLOSED_DATA = path.join(DATA_DIR, "closed.json");
+const REPORTS_DATA = path.join(DATA_DIR, "reports.json");
 
-// ================= DISCORD CLIENT =================
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
-
-// ================= EXPRESS =================
-const app = express();
-app.use(bodyParser.json());
-
-// ================= SSE =====================
-let appealListeners = [];
-
-app.get("/appeals/stream", (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.write("\n");
-
-  appealListeners.push(res);
-  console.log("🟢 MC client connected");
-
-  req.on("close", () => {
-    appealListeners = appealListeners.filter(r => r !== res);
-    console.log("🔴 MC client disconnected");
-  });
-});
-
-// ================= DISCORD READY =================
-client.once("ready", async () => {
-  console.log(`✅ Discord bot logged in as ${client.user.tag}`);
-
-  const channel = await client.channels.fetch(CHANNEL_ID);
-  if (!channel) {
-    console.error("❌ Discord channel not found");
-    return;
-  }
-
-  // ===== START RSS SCRAPER =====
-  startRSSScraper(async payload => {
-    let msg;
-
-    if (payload.type === "appeal_opened") {
-      msg = `APPEAL_OPENED|appealer=${payload.appealer}|time=${payload.time}`;
-    } else if (payload.type === "appeal_closed") {
-      msg =
-        `APPEAL_CLOSED|status=${payload.status}` +
-        `|appealer=${payload.appealer}` +
-        `|time=${payload.time}`;
-    } else {
-      return;
-    }
-
-    await channel.send(msg);
-    console.log("📤 Sent appeal to Discord:", msg);
-  });
-});
-
-client.login(process.env.DISCORD_TOKEN);
-
-// ================= DISCORD → MC =================
-client.on("messageCreate", msg => {
-  if (msg.channel.id !== CHANNEL_ID) return;
-  if (!msg.content.startsWith("APPEAL_")) return;
-
-  const payload = parseAppeal(msg.content);
-  console.log("➡️ Forwarding appeal to MC:", payload);
-
-  for (const c of appealListeners) {
-    c.write(`data: ${JSON.stringify(payload)}\n\n`);
-  }
-});
-
-// ================= LEADERBOARD =================
-app.get("/leaderboard", async (req, res) => {
-  try {
-    const channel = await client.channels.fetch(CHANNEL_ID);
-    if (!channel) return res.status(500).send("Channel not found");
-
-    let messages = [];
-    let lastId;
-
-    while (messages.length < 1000) {
-      const fetched = await channel.messages.fetch({
-        limit: 100,
-        before: lastId
-      });
-      if (!fetched.size) break;
-      messages.push(...fetched.values());
-      lastId = fetched.last().id;
-    }
-
-    const counts = {};
-    for (const msg of messages) {
-      if (!msg.content.startsWith("PUNISH|")) continue;
-
-      const staff = msg.content
-        .split("|")
-        .find(p => p.startsWith("staff="))
-        ?.replace("staff=", "");
-
-      if (!staff) continue;
-      counts[staff] = (counts[staff] || 0) + 1;
-    }
-
-    res.json(
-      Object.entries(counts)
-        .map(([staff, total]) => ({ staff, total }))
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 10)
-    );
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("Leaderboard error");
-  }
-});
+const INTERVAL = 60_000;
 
 // ================= HELPERS =================
-function parseAppeal(content) {
-  const parts = content.split("|");
-  const type = parts[0].toLowerCase();
-
-  const data = { type };
-  for (const p of parts.slice(1)) {
-    const [k, v] = p.split("=");
-    if (k && v) data[k] = v;
-  }
-  return data;
+function load(file) {
+  if (!fs.existsSync(file)) return new Set();
+  return new Set(JSON.parse(fs.readFileSync(file, "utf8")));
 }
 
-// ================= START =================
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Server running on ${PORT}`);
-});
+function save(file, set) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify([...set], null, 2));
+}
+
+function extractTag(xml, tag) {
+  const match = xml.match(new RegExp(`<${tag}>(.*?)</${tag}>`, "s"));
+  return match ? match[1].trim() : "";
+}
+
+async function scrapeFeed(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
+  const xml = await res.text();
+
+  return xml.split("<item>").slice(1).map(i => ({
+    title: extractTag(i, "title"),
+    link: extractTag(i, "link"),
+    pubDate: extractTag(i, "pubDate")
+  }));
+}
+
+// ================= LOOP =================
+async function startRSSScraper(send) {
+  console.log("🚀 RSS scraper started");
+
+  const openSeen = load(OPEN_DATA);
+  const closedSeen = load(CLOSED_DATA);
+  const reportsSeen = load(REPORTS_DATA);
+
+  while (true) {
+    try {
+      console.log("🔍 RSS scraper tick");
+
+      for (const item of await scrapeFeed(OPEN_RSS)) {
+        if (openSeen.has(item.link)) continue;
+        openSeen.add(item.link);
+
+        await send({
+          type: "appeal_opened",
+          appealer: item.title,
+          time: item.pubDate
+        });
+      }
+
+      for (const item of await scrapeFeed(CLOSED_RSS)) {
+        if (closedSeen.has(item.link)) continue;
+        closedSeen.add(item.link);
+
+        await send({
+          type: "appeal_closed",
+          status: "CLOSED",
+          appealer: item.title,
+          time: item.pubDate
+        });
+      }
+
+      for (const item of await scrapeFeed(REPORTS_RSS)) {
+        if (reportsSeen.has(item.link)) continue;
+        reportsSeen.add(item.link);
+
+        await send({
+          type: "report_opened",
+          title: item.title,
+          link: item.link,
+          time: item.pubDate
+        });
+      }
+
+      save(OPEN_DATA, openSeen);
+      save(CLOSED_DATA, closedSeen);
+      save(REPORTS_DATA, reportsSeen);
+    } catch (e) {
+      console.error("❌ RSS SCRAPER ERROR:", e.message);
+    }
+
+    await new Promise(r => setTimeout(r, INTERVAL));
+  }
+}
+
+module.exports = { startRSSScraper };
