@@ -3,7 +3,7 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
-const { startRSSScraper } = require("./rssscraper");
+const { startRSSScraper } = require("./rssScraper");
 
 // ================= CONFIG =================
 const CHANNEL_ID = "1309957290673180823";
