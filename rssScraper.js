@@ -100,19 +100,30 @@ async function startRSSScraper(send) {
       }
 
       // ===== PLAYER REPORTS =====
-      const reports = await scrapeFeed(REPORTS_RSS);
-      for (const r of reports) {
-        if (reportSeen.has(r.link)) continue;
-        reportSeen.add(r.link);
+      // ===== REPORTS =====
+const reports = await scrapeFeed(REPORTS_RSS);
 
-        await send({
-          type: "report_opened",
-          title: r.title,
-          author: r.author,
-          link: r.link,
-          time: r.time
-        });
-      }
+console.log(`[RSS] Reports fetched: ${reports.length}`);
+console.log(`[RSS] Reports already seen: ${reportSeen.size}`);
+
+for (const item of reports) {
+  if (reportSeen.has(item.link)) {
+    console.log(`[RSS] Skipping existing report: ${item.link}`);
+    continue;
+  }
+
+  console.log(`[RSS] NEW report detected: ${item.link}`);
+
+  reportSeen.add(item.link);
+
+  await send({
+    type: "report_opened",
+    title: item.title,
+    link: item.link,
+    time: item.pubDate
+  });
+}
+
 
       save(OPEN_DATA, openSeen);
       save(CLOSED_DATA, closedSeen);
