@@ -1,6 +1,6 @@
-// rssScraper.js
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
-// Node 18+ has global fetch
+// Node 18+ global fetch
 const fetch = global.fetch;
 
 // ================= CONFIG =================
@@ -9,60 +9,81 @@ const REPORTS_RSS =
 
 const INTERVAL = 60_000;
 
-// ================= HELPERS =================
-function extract(tag, block) {
-  const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
-  return m ? m[1].trim() : "";
+// 🔴 BRIGHT DATA PROXY (EXACT)
+const PROXY_URL =
+  "http://brd-customer-hl_d0683e82-zone-punishcounter:n49pu21tmjy3@brd.superproxy.io:33335";
+
+// ================= FETCH =================
+async function fetchRSS() {
+  const agent = new HttpsProxyAgent(PROXY_URL);
+
+  const res = await fetch(REPORTS_RSS, {
+    agent,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept":
+        "application/rss+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
+      "Pragma": "no-cache"
+    }
+  });
+
+  const text = await res.text();
+
+  console.log("🧪 RSS HTTP status:", res.status);
+  console.log("🧪 RSS preview:\n", text.slice(0, 500));
+
+  return text;
 }
 
-// ================= RSS PARSER =================
-async function fetchReports() {
-  const res = await fetch(REPORTS_RSS, {
-    headers: { "User-Agent": "Mozilla/5.0" }
-  });
+// ================= PARSER =================
+function parseItems(xml) {
+  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
 
-  const xml = await res.text();
-
-  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => {
+  return items.map(m => {
     const block = m[1];
+    const extract = tag =>
+      (block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)) || [])[1]?.trim();
+
     return {
-      title: extract("title", block),
-      link: extract("link", block),
-      time: extract("pubDate", block)
+      title: extract("title"),
+      link: extract("link"),
+      time: extract("pubDate")
     };
   });
-
-  return items;
 }
 
 // ================= LOOP =================
 async function startRSSScraper(send) {
-  console.log("🚀 RSS scraper started (SEND-ALL MODE)");
+  console.log("🚀 RSS scraper started (BRIGHT DATA)");
 
   while (true) {
     try {
       console.log("🔍 RSS scraper tick");
 
-      const reports = await fetchReports();
-      console.log(`📄 RSS items fetched: ${reports.length}`);
+      const xml = await fetchRSS();
+      const items = parseItems(xml);
 
-      for (const r of reports) {
-        if (!r.link) continue;
+      console.log(`📄 RSS items parsed: ${items.length}`);
 
-        console.log("📤 Sending report:", r.link);
+      for (const item of items) {
+        console.log("📨 Sending:", item.link);
 
         await send({
           type: "report_opened",
-          title: r.title,
-          link: r.link,
-          time: r.time
+          title: item.title,
+          link: item.link,
+          time: item.time
         });
       }
-    } catch (e) {
-      console.error("❌ RSS SCRAPER ERROR:", e);
+    } catch (err) {
+      console.error("❌ RSS SCRAPER ERROR:", err.message);
     }
 
-    console.log("⏳ Sleeping 60s\n");
+    console.log("⏳ Sleeping 60s");
     await new Promise(r => setTimeout(r, INTERVAL));
   }
 }
