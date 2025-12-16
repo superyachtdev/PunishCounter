@@ -1,5 +1,4 @@
-const fs = require("fs");
-const path = require("path");
+// rssScraper.js
 
 // Node 18+ has global fetch
 const fetch = global.fetch;
@@ -8,21 +7,9 @@ const fetch = global.fetch;
 const REPORTS_RSS =
   "https://invadedlands.net/forums/player-reports.18/index.rss";
 
-const DATA_DIR = "./data";
-const REPORTS_DATA = path.join(DATA_DIR, "reports.json");
 const INTERVAL = 60_000;
 
 // ================= HELPERS =================
-function load(file) {
-  if (!fs.existsSync(file)) return new Set();
-  return new Set(JSON.parse(fs.readFileSync(file, "utf8")));
-}
-
-function save(file, set) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify([...set], null, 2));
-}
-
 function extract(tag, block) {
   const m = block.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
   return m ? m[1].trim() : "";
@@ -50,9 +37,7 @@ async function fetchReports() {
 
 // ================= LOOP =================
 async function startRSSScraper(send) {
-  console.log("🚀 RSS scraper started");
-
-  const seen = load(REPORTS_DATA);
+  console.log("🚀 RSS scraper started (SEND-ALL MODE)");
 
   while (true) {
     try {
@@ -64,14 +49,7 @@ async function startRSSScraper(send) {
       for (const r of reports) {
         if (!r.link) continue;
 
-        if (seen.has(r.link)) {
-          console.log("↩️ Skipping known report:", r.link);
-          continue;
-        }
-
-        console.log("🆕 NEW report detected:", r.link);
-
-        seen.add(r.link);
+        console.log("📤 Sending report:", r.link);
 
         await send({
           type: "report_opened",
@@ -80,12 +58,11 @@ async function startRSSScraper(send) {
           time: r.time
         });
       }
-
-      save(REPORTS_DATA, seen);
     } catch (e) {
       console.error("❌ RSS SCRAPER ERROR:", e);
     }
 
+    console.log("⏳ Sleeping 60s\n");
     await new Promise(r => setTimeout(r, INTERVAL));
   }
 }
