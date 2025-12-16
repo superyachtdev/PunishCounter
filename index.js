@@ -3,7 +3,6 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const express = require("express");
 const bodyParser = require("body-parser");
-const { startScraper } = require("./scraper");
 
 // ================= CONFIG =================
 const CHANNEL_ID = "1309957290673180823";
@@ -23,31 +22,9 @@ const client = new Client({
   ]
 });
 
-client.once("ready", async () => {
+client.once("ready", () => {
   console.log(`✅ Discord bot logged in as ${client.user.tag}`);
-
-  const channel = await client.channels.fetch(CHANNEL_ID);
-
-  // ===== START SCRAPER AFTER BOT IS READY =====
-  startScraper(async payload => {
-    let msg;
-
-    if (payload.type === "appeal_opened") {
-      msg = `APPEAL_OPENED|appealer=${payload.appealer}|time=${payload.time}`;
-    } else if (payload.type === "appeal_closed") {
-      msg =
-        `APPEAL_CLOSED|staff=${payload.staff}` +
-        `|status=${payload.status}` +
-        `|appealer=${payload.appealer}` +
-        `|time=${payload.time}`;
-    } else {
-      return;
-    }
-
-    await channel.send(msg);
-    console.log("📤 Sent appeal to Discord:", msg);
-  });
-}); // ✅ THIS WAS MISSING BEFORE
+});
 
 client.login(process.env.DISCORD_TOKEN);
 
@@ -79,7 +56,6 @@ client.on("messageCreate", msg => {
   if (!msg.content.startsWith("APPEAL_")) return;
 
   const payload = parseAppeal(msg.content);
-
   console.log("➡️ Forwarding appeal to MC:", payload);
 
   for (const c of appealListeners) {
@@ -95,10 +71,7 @@ app.get("/leaderboard", async (req, res) => {
     let lastId;
 
     while (messages.length < 1000) {
-      const fetched = await channel.messages.fetch({
-        limit: 100,
-        before: lastId
-      });
+      const fetched = await channel.messages.fetch({ limit: 100, before: lastId });
       if (!fetched.size) break;
       messages.push(...fetched.values());
       lastId = fetched.last().id;
@@ -107,7 +80,6 @@ app.get("/leaderboard", async (req, res) => {
     const counts = {};
     for (const msg of messages) {
       if (!msg.content.startsWith("PUNISH|")) continue;
-
       const staff = msg.content
         .split("|")
         .find(p => p.startsWith("staff="))
